@@ -12,8 +12,9 @@ from app.ai.memory import (
 )
 from app.ai.pidgin import detect_language
 from app.ai.prompt import build_system_prompt, format_naira
-from app.models import Business, Conversation, Message, OrderDraft
+from app.models import BookingDraft, Business, Conversation, Message, OrderDraft
 from app.models.enums import DRAFT_STATUS_ACTIVE, MESSAGE_ROLE_BOT, MESSAGE_ROLE_CUSTOMER
+from app.services import availability
 from app.services.context import load_faqs, load_items, load_services
 
 logger = logging.getLogger("chibot.ai")
@@ -75,6 +76,7 @@ async def generate_reply(
     items = await load_items(session, business.id)
     services = await load_services(session, business.id)
     draft = await load_active_draft(session, conversation.id)
+    booking_draft = await load_active_booking_draft(session, business, conversation.id)
     system = build_system_prompt(
         business,
         faqs,
@@ -83,6 +85,7 @@ async def generate_reply(
         summary=conversation.summary,
         language=language,
         draft=draft,
+        booking_draft=booking_draft,
     )
 
     working: list[dict] = list(history)
@@ -146,6 +149,35 @@ async def load_active_draft(session, conversation_id: str) -> dict | None:
             {"name": item["name"], "quantity": item["quantity"]} for item in row.items
         ],
         "total": format_naira(row.total_kobo),
+    }
+
+
+async def load_active_booking_draft(
+    session, business: Business, conversation_id: str
+) -> dict | None:
+    """The latest unexpired, unconfirmed booking draft for this chat, if any."""
+    row = (
+        await session.execute(
+            select(BookingDraft)
+            .where(
+                BookingDraft.conversation_id == conversation_id,
+                BookingDraft.status == DRAFT_STATUS_ACTIVE,
+                BookingDraft.expires_at > func.now(),
+            )
+            .order_by(BookingDraft.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    from app.models import Service
+
+    service = await session.get(Service, row.service_id) if row.service_id else None
+    tz = availability.business_zone(business)
+    return {
+        "draft_id": row.id,
+        "service": service.name if service else "appointment",
+        "slot": availability.format_slot(row.slot_start, tz),
     }
 
 

@@ -1,6 +1,8 @@
 from app.models.base import Base, TimestampMixin, UUIDMixin
 from app.models.booking import Booking
+from app.models.booking_draft import BookingDraft
 from app.models.business import Business
+from app.models.business_hours import BusinessHours
 from app.models.catalog import CatalogCategory, CatalogItem
 from app.models.conversation import Conversation
 from app.models.handoff import Handoff
@@ -16,7 +18,9 @@ __all__ = [
     "FAQ",
     "Base",
     "Booking",
+    "BookingDraft",
     "Business",
+    "BusinessHours",
     "CatalogCategory",
     "CatalogItem",
     "Conversation",

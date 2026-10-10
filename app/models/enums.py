@@ -31,6 +31,14 @@ BOOKING_STATUS_PENDING: str = "pending"
 BOOKING_STATUS_CONFIRMED: str = "confirmed"
 BOOKING_STATUS_COMPLETED: str = "completed"
 BOOKING_STATUS_CANCELLED: str = "cancelled"
+BOOKING_STATUS_DECLINED: str = "declined"
+
+# Statuses that keep a slot occupied (used by the exclude constraint predicate).
+BOOKING_BLOCKING_STATUSES = (
+    BOOKING_STATUS_PENDING,
+    BOOKING_STATUS_CONFIRMED,
+    BOOKING_STATUS_COMPLETED,
+)
 
 HANDOFF_STATUS_OPEN: str = "open"
 HANDOFF_STATUS_RESOLVED: str = "resolved"

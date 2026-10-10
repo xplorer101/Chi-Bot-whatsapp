@@ -16,6 +16,7 @@ from typing import Any
 
 from sqlalchemy import func, or_, select
 
+from app.ai import booking_tools
 from app.ai.prompt import format_naira
 from app.config import settings
 from app.models import Business, CatalogItem, Conversation, Message, Order, OrderDraft
@@ -122,6 +123,7 @@ TOOLS = [
     check_availability_schema,
     propose_order_schema,
     create_order_schema,
+    *booking_tools.TOOLS,
 ]
 
 
@@ -132,6 +134,11 @@ async def dispatch(
     name: str,
     args: dict[str, Any],
 ) -> str:
+    booking_result = await booking_tools.handle(
+        session, business, conversation, name, args
+    )
+    if booking_result is not None:
+        return json.dumps(booking_result, ensure_ascii=False)
     if name == "search_catalog":
         result = await _search_catalog(session, business.id, args)
     elif name == "check_availability":

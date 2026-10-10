@@ -1,10 +1,19 @@
 import json
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.models import FAQ, Business, CatalogItem, Service
 
 
 def format_naira(kobo: int) -> str:
     return f"NGN {kobo / 100:,.0f}"
+
+
+def _zone(business: Business):
+    try:
+        return ZoneInfo(business.timezone or "Africa/Lagos")
+    except (ZoneInfoNotFoundError, ValueError):
+        return ZoneInfo("Africa/Lagos")
 
 
 def _opening_hours_text(hours: dict | None) -> str:
@@ -23,6 +32,8 @@ def build_system_prompt(
     summary: str | None = None,
     language: str = "english",
     draft: dict | None = None,
+    booking_draft: dict | None = None,
+    now: datetime | None = None,
 ) -> str:
     lines: list[str] = [
         (
@@ -43,6 +54,12 @@ def build_system_prompt(
     if business.location:
         lines.append(f"Location: {business.location}")
     lines.append(f"Opening hours: {_opening_hours_text(business.opening_hours)}")
+    tz = _zone(business)
+    now_local = (now or datetime.now(UTC)).astimezone(tz)
+    lines.append(
+        f"Current date and time: {now_local.strftime('%A %d %B %Y, %-I:%M %p')} "
+        f"({business.timezone or 'Africa/Lagos'})."
+    )
     lines.append(
         f"Delivery areas: {', '.join(business.delivery_areas) if business.delivery_areas else 'Not provided'}"
     )
@@ -72,7 +89,8 @@ def build_system_prompt(
         lines.append("\n## Bookable services")
         for service in services:
             lines.append(
-                f"- {service.name}: {format_naira(service.price_kobo)} ({service.duration_minutes} mins)"
+                f"- {service.id} {service.name}: "
+                f"{format_naira(service.price_kobo)} ({service.duration_minutes} mins)"
             )
 
     if summary:
@@ -81,6 +99,7 @@ def build_system_prompt(
 
     if draft:
         lines.append("\n## Draft order awaiting the customer's confirmation")
+        lines.append("- kind: order")
         lines.append(f"- draft_id: {draft['draft_id']}")
         for line_item in draft["items"]:
             lines.append(f"- {line_item['name']} x{line_item['quantity']}")
@@ -89,6 +108,18 @@ def build_system_prompt(
             "The customer has NOT confirmed this draft yet. If they confirm in their "
             "latest message, call create_order with the draft_id above. If they change "
             "anything, call propose_order again with the new details."
+        )
+
+    if booking_draft:
+        lines.append("\n## Draft booking awaiting the customer's confirmation")
+        lines.append("- kind: booking")
+        lines.append(f"- draft_id: {booking_draft['draft_id']}")
+        lines.append(f"- service: {booking_draft['service']}")
+        lines.append(f"- slot: {booking_draft['slot']}")
+        lines.append(
+            "The customer has NOT confirmed this booking yet. If they confirm in their "
+            "latest message, call confirm_booking with the draft_id above. If they want "
+            "a different time, call propose_booking again."
         )
 
     lines.extend(
@@ -118,6 +149,41 @@ def build_system_prompt(
                 "- After the order is placed, tell the customer it has been received and "
                 "the business will confirm it shortly. Do not promise a delivery time you "
                 "were not given."
+            ),
+        ]
+    )
+
+    lines.extend(
+        [
+            "\n## Taking a booking",
+            (
+                "- Before offering any appointment time, call check_availability_slots "
+                "with the service and the day they want. Use only the real times it "
+                "returns. Never invent a time or promise a slot."
+            ),
+            (
+                "- When the customer picks a time, call propose_booking with the service "
+                "and the exact start_time from the slots. It saves a draft and returns a "
+                "draft_id and summary - show that to the customer and ask them to confirm."
+            ),
+            (
+                "- Only call confirm_booking(draft_id) after the customer explicitly "
+                "confirms in a NEW message; if you call it too early it is refused."
+            ),
+            (
+                "- Some businesses approve appointments first. If a booking comes back "
+                "as 'pending', tell the customer it is booked but still needs the "
+                "business's approval."
+            ),
+            (
+                "- Use cancel_booking or reschedule_booking only for this customer's own "
+                "bookings, and only outside the business's cancellation window. If it is "
+                "too close, tell them to contact the business directly."
+            ),
+            (
+                "- Examples: 'I want to book a haircut for Saturday' and Pidgin 'I wan "
+                "book haircut for Saturday' both mean: pick the service, call "
+                "check_availability_slots for that day, then propose_booking."
             ),
         ]
     )

@@ -23,6 +23,10 @@ class Settings(BaseSettings):
 
     order_draft_ttl_minutes: int = 30
 
+    booking_draft_ttl_minutes: int = 30
+    booking_reminder_lead_minutes: int = 1440
+    max_slots_returned: int = 30
+
     graph_api_base: str = "https://graph.facebook.com/v22.0"
     whatsapp_access_token: str = ""
     whatsapp_phone_number_id: str = ""

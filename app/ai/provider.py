@@ -101,13 +101,24 @@ def _mock_round(system: str, messages: list[dict]) -> RoundResult:
 
     content = last.get("content")
     if isinstance(content, list) and content and content[0].get("type") == "tool_result":
-        return RoundResult(text=_mock_react_to_tool_result(content))
+        return _mock_react_to_tool_result(content)
 
     text = _message_text(last)
-    draft_id = _draft_id_from_system(system)
+    kind, draft_id = _draft_info_from_system(system)
     if draft_id and _is_confirmation(text):
+        tool = "confirm_booking" if kind == "booking" else "create_order"
         return RoundResult(
-            tool_use=[ToolCall(id="tc-confirm", name="create_order", input={"draft_id": draft_id})]
+            tool_use=[ToolCall(id="tc-confirm", name=tool, input={"draft_id": draft_id})]
+        )
+    if _has_booking_intent(system, text):
+        return RoundResult(
+            tool_use=[
+                ToolCall(
+                    id="tc-check",
+                    name="check_availability_slots",
+                    input=_build_booking_check(text, system),
+                )
+            ]
         )
     if _has_order_intent(system, text):
         return RoundResult(
@@ -146,6 +157,95 @@ def _catalog_from_system(system: str) -> list[dict]:
 def _draft_id_from_system(system: str) -> str | None:
     m = re.search(r"- draft_id: (\S+)", system)
     return m.group(1) if m else None
+
+
+def _draft_info_from_system(system: str) -> tuple[str | None, str | None]:
+    """Return (kind, draft_id) for the active draft section, if any."""
+    if "## Draft booking awaiting" in system:
+        kind = "booking"
+    elif "## Draft order awaiting" in system:
+        kind = "order"
+    else:
+        return None, None
+    return kind, _draft_id_from_system(system)
+
+
+def _services_from_system(system: str) -> list[dict]:
+    """Parse `- <id> <name>: NGN <price> (<n> mins)` service lines."""
+    out: list[dict] = []
+    for m in re.finditer(
+        r"^- (\S+) (.+?): NGN ([0-9,]+) \(([0-9]+) mins\)", system, flags=re.MULTILINE
+    ):
+        out.append(
+            {
+                "id": m.group(1),
+                "name": m.group(2).strip(),
+                "price_kobo": int(m.group(3).replace(",", "")),
+                "duration": int(m.group(4)),
+            }
+        )
+    return out
+
+
+_BOOKING_WORDS = {"book", "booking", "appointment", "appointments", "reserve", "schedule"}
+_WEEKDAY_WORDS = {
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+    "today",
+    "tomorrow",
+    "mon",
+    "tue",
+    "wed",
+    "thu",
+    "fri",
+    "sat",
+    "sun",
+}
+
+
+def _has_booking_intent(system: str, text: str) -> bool:
+    words = set(re.findall(r"[a-z']+", text.lower()))
+    if words & _BOOKING_WORDS:
+        return True
+    services = _services_from_system(system)
+    if not services:
+        return False
+    tokens = {w for w in words if len(w) >= 3 and w not in _MOCK_SKIP_WORDS}
+    catalog_hit = any(
+        tokens & set(re.findall(r"[a-z']+", item["name"].lower()))
+        for item in _catalog_from_system(system)
+    )
+    if catalog_hit:
+        return False
+    return any(
+        tokens & set(re.findall(r"[a-z']+", service["name"].lower()))
+        for service in services
+    )
+
+
+def _build_booking_check(text: str, system: str) -> dict:
+    services = _services_from_system(system)
+    words = set(re.findall(r"[a-z']+", text.lower()))
+    tokens = {w for w in words if len(w) >= 3 and w not in _MOCK_SKIP_WORDS}
+    chosen = next(
+        (
+            service
+            for service in services
+            if tokens & set(re.findall(r"[a-z']+", service["name"].lower()))
+        ),
+        services[0] if services else None,
+    )
+    date_val = "tomorrow"
+    for word in words:
+        if word in _WEEKDAY_WORDS:
+            date_val = word
+            break
+    return {"service": chosen["id"] if chosen else "", "date": date_val}
 
 
 _CONFIRM_PHRASES = {
@@ -225,7 +325,7 @@ def _build_proposal(text: str, system: str) -> dict:
     }
 
 
-def _mock_react_to_tool_result(content: list[dict]) -> str:
+def _mock_react_to_tool_result(content: list[dict]) -> RoundResult:
     for block in content:
         if block.get("type") != "tool_result":
             continue
@@ -233,23 +333,84 @@ def _mock_react_to_tool_result(content: list[dict]) -> str:
         try:
             data = json.loads(payload)
         except (TypeError, ValueError):
-            return "I could not process that. Please try again."
+            return RoundResult(text="I could not process that. Please try again.")
+
+        # check_availability_slots -> auto-propose the first open slot.
+        if "slots" in data:
+            if not data.get("ok"):
+                return RoundResult(text=_join_errors(data))
+            slots = data.get("slots") or []
+            if not slots:
+                return RoundResult(
+                    text=(
+                        f"No open times for {data.get('service', 'that service')} on "
+                        f"{data.get('date', 'that day')}. Would another day work?"
+                    )
+                )
+            return RoundResult(
+                tool_use=[
+                    ToolCall(
+                        id="tc-propose-booking",
+                        name="propose_booking",
+                        input={
+                            "service": data["service_id"],
+                            "start_time": slots[0]["start"],
+                            "customer_name": "Customer",
+                        },
+                    )
+                ]
+            )
+
         if data.get("ok"):
-            if "draft_id" in data and "order_id" not in data:
+            if "booking_id" in data:
+                if data.get("status") == "pending":
+                    return RoundResult(
+                        text=(
+                            f"Your {data.get('service', 'appointment')} on "
+                            f"{data.get('slot', '')} is booked, pending the business's "
+                            "approval. We'll let you know once it's confirmed."
+                        )
+                    )
+                return RoundResult(
+                    text=(
+                        f"You're booked for {data.get('service', 'your appointment')} "
+                        f"on {data.get('slot', '')}. See you then!"
+                    )
+                )
+            if "order_id" in data:
+                return RoundResult(
+                    text=(
+                        "Your order has been received and the business will confirm it "
+                        "shortly. Thank you!"
+                    )
+                )
+            if "draft_id" in data and "slot" in data:
+                return RoundResult(
+                    text=(
+                        f"{data.get('service', 'Appointment')}: {data['slot']}.\n"
+                        "Reply to confirm and I'll book it for you."
+                    )
+                )
+            if "draft_id" in data and "items" in data:
                 lines = ["Here is your order summary:"]
                 lines += [
                     f"- {item['name']} x{item['quantity']}" for item in data["items"]
                 ]
                 lines.append(f"Total: {data['total']}")
                 lines.append("Reply to confirm and I'll place the order for you.")
-                return "\n".join(lines)
-            if "order_id" in data:
-                return (
-                    "Your order has been received and the business will confirm it "
-                    "shortly. Thank you!"
-                )
-        errors = "; ".join(data.get("errors", ["Something went wrong."]))
-        return f"I'm sorry, I couldn't do that: {errors} Let me help you fix it."
+                return RoundResult(text="\n".join(lines))
+        if "available" in data:
+            opts = ", ".join(data["available"]) or "another day"
+            return RoundResult(
+                text=f"That time isn't available. How about: {opts}?"
+            )
+        return RoundResult(text=_join_errors(data))
+    return RoundResult(text="I could not process that. Please try again.")
+
+
+def _join_errors(data: dict) -> str:
+    errors = "; ".join(data.get("errors") or ["Something went wrong."])
+    return f"I'm sorry, I couldn't do that: {errors} Let me help you fix it."
 
 
 def _mock_answer(system: str, text: str) -> str:

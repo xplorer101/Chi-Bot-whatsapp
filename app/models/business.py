@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, Text
+from sqlalchemy import Boolean, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,6 +30,22 @@ class Business(UUIDMixin, TimestampMixin, Base):
     whatsapp_business_account_id: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(
         String(20), default=BUSINESS_STATUS_ACTIVE, server_default=BUSINESS_STATUS_ACTIVE
+    )
+
+    booking_min_notice_minutes: Mapped[int] = mapped_column(
+        Integer, default=120, server_default="120"
+    )
+    booking_max_days_ahead: Mapped[int] = mapped_column(
+        Integer, default=30, server_default="30"
+    )
+    booking_slot_interval_minutes: Mapped[int] = mapped_column(
+        Integer, default=30, server_default="30"
+    )
+    booking_requires_approval: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    booking_cancellation_window_minutes: Mapped[int] = mapped_column(
+        Integer, default=120, server_default="120"
     )
 
     owners: Mapped[list["Owner"]] = relationship(
