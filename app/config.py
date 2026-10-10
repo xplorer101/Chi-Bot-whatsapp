@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     ai_mock: bool = False
     ai_max_tokens: int = 400
 
+    order_draft_ttl_minutes: int = 30
+
     graph_api_base: str = "https://graph.facebook.com/v22.0"
     whatsapp_access_token: str = ""
     whatsapp_phone_number_id: str = ""

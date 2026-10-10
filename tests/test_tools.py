@@ -67,10 +67,13 @@ async def test_check_availability_unknown_item(tenant):
 
 async def test_create_order_computes_total_from_db(tenant):
     async with SessionLocal() as session:
-        result = await dispatch(
+        from app.models import Message
+        from app.models.enums import MESSAGE_ROLE_CUSTOMER
+
+        pr = await dispatch(
             session,
             tenant,
-            "create_order",
+            "propose_order",
             {
                 "items": [
                     {"item_id": tenant["kunu"], "quantity": 2},
@@ -80,9 +83,13 @@ async def test_create_order_computes_total_from_db(tenant):
                 "delivery_address": "Lekki Phase 1",
             },
         )
+        assert pr["ok"] is True
+        assert pr["total_kobo"] == 100000 * 2 + 250000
+        assert pr["total"] == "NGN 4,500"
+        session.add(Message(business_id=tenant["business_id"], conversation_id=tenant["conversation_id"], role=MESSAGE_ROLE_CUSTOMER, body="yes"))
+        await session.flush()
+        result = await dispatch(session, tenant, "create_order", {"draft_id": pr["draft_id"]})
         assert result["ok"] is True
-        assert result["total_kobo"] == 100000 * 2 + 250000  # server-computed
-        assert result["total"] == "NGN 4,500"
         assert result["status"] == ORDER_STATUS_PENDING
 
         order = await session.get(Order, result["order_id"])
@@ -97,7 +104,7 @@ async def test_create_order_insufficient_stock(tenant):
         result = await dispatch(
             session,
             tenant,
-            "create_order",
+            "propose_order",
             {"items": [{"item_id": tenant["kunu"], "quantity": 99}]},
         )
         assert result["ok"] is False
@@ -109,7 +116,7 @@ async def test_create_order_rejects_foreign_item(tenant, other_tenant):
         result = await dispatch(
             session,
             tenant,
-            "create_order",
+            "propose_order",
             {"items": [{"item_id": other_tenant["item"], "quantity": 1}]},
         )
         assert result["ok"] is False

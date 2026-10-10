@@ -1,12 +1,14 @@
 """Verify the tool-use loop drives tools via the dispatcher and returns text."""
 
 import pytest_asyncio
+from sqlalchemy import select
 
 from app.ai import provider
-from app.ai.agent import generate_reply
+from app.ai.agent import generate_reply, respond
 from app.ai.provider import RoundResult, ToolCall
 from app.db import SessionLocal
-from app.models import Business, Conversation
+from app.models import Business, Conversation, Order
+from app.models.enums import ORDER_STATUS_PENDING
 
 
 @pytest_asyncio.fixture
@@ -64,3 +66,32 @@ async def test_loop_gives_up_after_max_rounds(monkeypatch, tenant, conversation)
         reply = await generate_reply(session, business, convo, "english")
 
     assert "Sorry" in reply
+
+
+async def test_offline_mock_full_order_flow(tenant, conversation):
+    """AI_MOCK scripts the real loop: propose -> summary -> confirm -> order."""
+    async with SessionLocal() as session:
+        business = await session.get(Business, tenant["business_id"])
+        convo = await session.get(Conversation, conversation["conversation_id"])
+
+        reply1 = await respond(session, business, convo, "I want to order jollof rice")
+        assert "Total: NGN 2,500" in reply1
+        assert "confirm" in reply1.lower()
+
+        # nothing placed yet
+        orders = (await session.execute(select(Order))).scalars().all()
+        assert orders == []
+
+        reply2 = await respond(session, business, convo, "yes")
+        assert "received" in reply2.lower()
+        await session.commit()
+
+    async with SessionLocal() as session:
+        orders = (
+            await session.execute(
+                select(Order).where(Order.business_id == tenant["business_id"])
+            )
+        ).scalars().all()
+        assert len(orders) == 1
+        assert orders[0].status == ORDER_STATUS_PENDING
+        assert orders[0].total_kobo == 250000

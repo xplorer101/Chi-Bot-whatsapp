@@ -1,6 +1,8 @@
 import logging
 from datetime import UTC, datetime
 
+from sqlalchemy import func, select
+
 from app.ai import provider, tools
 from app.ai.memory import (
     load_recent_messages,
@@ -9,9 +11,9 @@ from app.ai.memory import (
     to_anthropic_messages,
 )
 from app.ai.pidgin import detect_language
-from app.ai.prompt import build_system_prompt
-from app.models import Business, Conversation, Message
-from app.models.enums import MESSAGE_ROLE_BOT, MESSAGE_ROLE_CUSTOMER
+from app.ai.prompt import build_system_prompt, format_naira
+from app.models import Business, Conversation, Message, OrderDraft
+from app.models.enums import DRAFT_STATUS_ACTIVE, MESSAGE_ROLE_BOT, MESSAGE_ROLE_CUSTOMER
 from app.services.context import load_faqs, load_items, load_services
 
 logger = logging.getLogger("chibot.ai")
@@ -72,6 +74,7 @@ async def generate_reply(
     faqs = await load_faqs(session, business.id)
     items = await load_items(session, business.id)
     services = await load_services(session, business.id)
+    draft = await load_active_draft(session, conversation.id)
     system = build_system_prompt(
         business,
         faqs,
@@ -79,6 +82,7 @@ async def generate_reply(
         services,
         summary=conversation.summary,
         language=language,
+        draft=draft,
     )
 
     working: list[dict] = list(history)
@@ -118,6 +122,31 @@ async def generate_reply(
 
     logger.warning("tool loop exceeded %s rounds", MAX_TOOL_ROUNDS)
     return fallback_reply(business)
+
+
+async def load_active_draft(session, conversation_id: str) -> dict | None:
+    """The latest unexpired, unconfirmed draft for this chat, if any."""
+    row = (
+        await session.execute(
+            select(OrderDraft)
+            .where(
+                OrderDraft.conversation_id == conversation_id,
+                OrderDraft.status == DRAFT_STATUS_ACTIVE,
+                OrderDraft.expires_at > func.now(),
+            )
+            .order_by(OrderDraft.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    return {
+        "draft_id": row.id,
+        "items": [
+            {"name": item["name"], "quantity": item["quantity"]} for item in row.items
+        ],
+        "total": format_naira(row.total_kobo),
+    }
 
 
 async def maybe_refresh_summary(

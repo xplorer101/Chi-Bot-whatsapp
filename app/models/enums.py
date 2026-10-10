@@ -22,6 +22,11 @@ ORDER_STATUS_PAID: str = "paid"
 ORDER_STATUS_DELIVERED: str = "delivered"
 ORDER_STATUS_CANCELLED: str = "cancelled"
 
+DRAFT_STATUS_ACTIVE: str = "active"
+DRAFT_STATUS_PLACED: str = "placed"
+DRAFT_STATUS_EXPIRED: str = "expired"
+DRAFT_STATUS_SUPERSEDED: str = "superseded"
+
 BOOKING_STATUS_PENDING: str = "pending"
 BOOKING_STATUS_CONFIRMED: str = "confirmed"
 BOOKING_STATUS_COMPLETED: str = "completed"

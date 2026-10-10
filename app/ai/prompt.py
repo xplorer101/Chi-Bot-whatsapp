@@ -22,6 +22,7 @@ def build_system_prompt(
     services: list[Service],
     summary: str | None = None,
     language: str = "english",
+    draft: dict | None = None,
 ) -> str:
     lines: list[str] = [
         (
@@ -63,7 +64,8 @@ def build_system_prompt(
                 f", stock {item.stock_qty}" if item.stock_qty is not None else ""
             )
             lines.append(
-                f"- {item.name}: {format_naira(item.price_kobo)}/{item.unit or 'unit'}{stock}"
+                f"- {item.id} {item.name}: "
+                f"{format_naira(item.price_kobo)}/{item.unit or 'unit'}{stock}"
             )
 
     if services:
@@ -77,26 +79,45 @@ def build_system_prompt(
         lines.append("\n## Summary of the earlier conversation")
         lines.append(summary)
 
+    if draft:
+        lines.append("\n## Draft order awaiting the customer's confirmation")
+        lines.append(f"- draft_id: {draft['draft_id']}")
+        for line_item in draft["items"]:
+            lines.append(f"- {line_item['name']} x{line_item['quantity']}")
+        lines.append(f"- Total: {draft['total']}")
+        lines.append(
+            "The customer has NOT confirmed this draft yet. If they confirm in their "
+            "latest message, call create_order with the draft_id above. If they change "
+            "anything, call propose_order again with the new details."
+        )
+
     lines.extend(
         [
             "\n## Taking an order",
             (
-                "- Use the search_catalog tool to find items and their REAL prices before "
-                "quoting any price. Never invent a price or use a price the customer says."
-            ),
-            "- Use check_availability when the customer asks for a specific quantity.",
-            (
-                "- Show the customer a clear summary (each item, quantity and unit price) and "
-                "the TOTAL, then ask them to confirm BEFORE calling create_order."
+                "- Use search_catalog to get real item ids, stock and prices, and "
+                "check_availability for a specific quantity. Never invent a price or "
+                "accept a price the customer states."
             ),
             (
-                "- Only call create_order after the customer explicitly confirms. Never place "
-                "an order on their behalf without confirmation."
+                "- When the customer wants to order, call propose_order with the exact "
+                "items and quantities. It validates stock/prices and returns a draft_id "
+                "and the total - show that summary to the customer and ask them to "
+                "confirm."
             ),
             (
-                "- After the order is saved, tell the customer it has been received and the "
-                "business will confirm it shortly. Do not promise a delivery time you were "
-                "not given."
+                "- Only call create_order(draft_id) after the customer explicitly "
+                "confirms in a NEW message. Never place an order without that "
+                "confirmation; if you call it too early it is refused."
+            ),
+            (
+                "- If the customer changes any detail, call propose_order again with the "
+                "new details; it replaces the previous draft."
+            ),
+            (
+                "- After the order is placed, tell the customer it has been received and "
+                "the business will confirm it shortly. Do not promise a delivery time you "
+                "were not given."
             ),
         ]
     )
